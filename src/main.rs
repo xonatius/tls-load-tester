@@ -161,7 +161,7 @@ async fn run_once(addr: &str, sni: &str) -> Result<(), Box<dyn std::error::Error
 
     let mut record = TlsRecord::Buffer(BytesMut::with_capacity(5));
     let mut handshake = HandshakeRecord::Buffer(BytesMut::with_capacity(4));
-    let mut buf = BytesMut::with_capacity(64 * 1024);
+    let mut buf = BytesMut::with_capacity(4 * 1024);
     // TODO: timeout
     loop {
         let mut len = stream.read_buf(&mut buf).await?;
