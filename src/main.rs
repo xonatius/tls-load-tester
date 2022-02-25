@@ -144,107 +144,110 @@ enum TlsRecord {
     Skip(usize),
 }
 
-async fn loop_ch(addr: &str, sni: &str) -> Result<(), Box<dyn std::error::Error>> {
-    'next: loop {
-        // println!("Loop");
-        let mut stream = net::TcpStream::connect(addr).await?;
-        stream.write_all(&format_client_hello(sni)).await?;
+async fn loop_ch(addr: &str, sni: &str) {
+    loop {
+        let _ = run_once(addr, sni).await;
+    }
+}
 
-        // RST instead of fin
-        // TODO: Would be nice to forget about the socket, to keep the conneciton open on the peer
-        stream.set_linger(Some(Duration::new(0, 0)))?;
+async fn run_once(addr: &str, sni: &str) -> Result<(), Box<dyn std::error::Error>> {
+    // println!("Loop");
+    let mut stream = net::TcpStream::connect(addr).await?;
+    stream.write_all(&format_client_hello(sni)).await?;
 
-        let mut record = TlsRecord::Buffer(BytesMut::with_capacity(5));
-        let mut handshake = HandshakeRecord::Buffer(BytesMut::with_capacity(4));
-        let mut buf = BytesMut::with_capacity(64 * 1024);
-        // TODO: timeout
-        loop {
-            let mut len = stream.read_buf(&mut buf).await?;
-            if len == 0 {
-                break;
-            }
-            while len > 0 {
-                //println!("len={len}, record={record:?} handshake={handshake:?}");
-                match record {
-                    TlsRecord::Buffer(mut record_buf) => {
-                        let size = std::cmp::min(5 - record_buf.len(), len);
-                        record_buf.put_slice(&buf[..size]);
-                        buf.advance(size);
-                        len -= size;
-                        if record_buf.len() == 5 {
-                            let content_type = record_buf[0];
-                            let expect = u16::from_be_bytes(
-                                record_buf[3..5].try_into().expect("Fixed size"),
-                            )
-                            .into();
-                            record = if content_type == 22 {
-                                TlsRecord::Handshake(expect)
-                            } else {
-                                TlsRecord::Skip(expect)
-                            };
+    // RST instead of fin
+    // TODO: Would be nice to forget about the socket, to keep the conneciton open on the peer
+    stream.set_linger(Some(Duration::new(0, 0)))?;
+
+    let mut record = TlsRecord::Buffer(BytesMut::with_capacity(5));
+    let mut handshake = HandshakeRecord::Buffer(BytesMut::with_capacity(4));
+    let mut buf = BytesMut::with_capacity(64 * 1024);
+    // TODO: timeout
+    loop {
+        let mut len = stream.read_buf(&mut buf).await?;
+        if len == 0 {
+            break;
+        }
+        while len > 0 {
+            //println!("len={len}, record={record:?} handshake={handshake:?}");
+            match record {
+                TlsRecord::Buffer(mut record_buf) => {
+                    let size = std::cmp::min(5 - record_buf.len(), len);
+                    record_buf.put_slice(&buf[..size]);
+                    buf.advance(size);
+                    len -= size;
+                    if record_buf.len() == 5 {
+                        let content_type = record_buf[0];
+                        let expect =
+                            u16::from_be_bytes(record_buf[3..5].try_into().expect("Fixed size"))
+                                .into();
+                        record = if content_type == 22 {
+                            TlsRecord::Handshake(expect)
                         } else {
-                            record = TlsRecord::Buffer(record_buf);
-                        }
-                    }
-                    TlsRecord::Handshake(expect) => {
-                        let mut len2 = std::cmp::min(expect, len);
-                        len -= len2;
-                        record = if expect - len2 == 0 {
-                            TlsRecord::Buffer(BytesMut::with_capacity(5))
-                        } else {
-                            TlsRecord::Handshake(expect - len2)
+                            TlsRecord::Skip(expect)
                         };
-                        while len2 > 0 {
-                            match handshake {
-                                HandshakeRecord::Buffer(mut handshake_buf) => {
-                                    let size = std::cmp::min(4 - handshake_buf.len(), len2);
-                                    handshake_buf.put_slice(&buf[..size]);
-                                    len2 -= size;
-                                    buf.advance(size);
-                                    if handshake_buf.len() == 4 {
-                                        let handshake_type = handshake_buf[0];
-                                        if handshake_type == 12 {
-                                            continue 'next;
-                                        }
-                                        handshake_buf[0] = 0;
-                                        let expect = u32::from_be_bytes(
-                                            handshake_buf[..4].try_into().expect("Fixed size"),
-                                        )
-                                            as usize;
-                                        handshake = HandshakeRecord::Skip(expect);
-                                    } else {
-                                        handshake = HandshakeRecord::Buffer(handshake_buf);
-                                    }
-                                }
-                                HandshakeRecord::Skip(expect) => {
-                                    if expect <= len2 {
-                                        handshake =
-                                            HandshakeRecord::Buffer(BytesMut::with_capacity(4));
-                                        len2 -= expect;
-                                        buf.advance(expect);
-                                    } else {
-                                        handshake = HandshakeRecord::Skip(expect - len2);
-                                        buf.advance(len2);
-                                        len2 = 0;
-                                    }
-                                }
-                            };
-                        }
+                    } else {
+                        record = TlsRecord::Buffer(record_buf);
                     }
-                    TlsRecord::Skip(expect) => {
-                        if expect <= len {
-                            len -= expect;
-                            buf.advance(expect);
-                            record = TlsRecord::Buffer(BytesMut::with_capacity(5));
-                        } else {
-                            record = TlsRecord::Skip(expect - len);
-                            len = 0;
-                        }
+                }
+                TlsRecord::Handshake(expect) => {
+                    let mut len2 = std::cmp::min(expect, len);
+                    len -= len2;
+                    record = if expect - len2 == 0 {
+                        TlsRecord::Buffer(BytesMut::with_capacity(5))
+                    } else {
+                        TlsRecord::Handshake(expect - len2)
+                    };
+                    while len2 > 0 {
+                        match handshake {
+                            HandshakeRecord::Buffer(mut handshake_buf) => {
+                                let size = std::cmp::min(4 - handshake_buf.len(), len2);
+                                handshake_buf.put_slice(&buf[..size]);
+                                len2 -= size;
+                                buf.advance(size);
+                                if handshake_buf.len() == 4 {
+                                    let handshake_type = handshake_buf[0];
+                                    if handshake_type == 12 {
+                                        return Ok(());
+                                    }
+                                    handshake_buf[0] = 0;
+                                    let expect = u32::from_be_bytes(
+                                        handshake_buf[..4].try_into().expect("Fixed size"),
+                                    ) as usize;
+                                    handshake = HandshakeRecord::Skip(expect);
+                                } else {
+                                    handshake = HandshakeRecord::Buffer(handshake_buf);
+                                }
+                            }
+                            HandshakeRecord::Skip(expect) => {
+                                if expect <= len2 {
+                                    handshake = HandshakeRecord::Buffer(BytesMut::with_capacity(4));
+                                    len2 -= expect;
+                                    buf.advance(expect);
+                                } else {
+                                    handshake = HandshakeRecord::Skip(expect - len2);
+                                    buf.advance(len2);
+                                    len2 = 0;
+                                }
+                            }
+                        };
+                    }
+                }
+                TlsRecord::Skip(expect) => {
+                    if expect <= len {
+                        len -= expect;
+                        buf.advance(expect);
+                        record = TlsRecord::Buffer(BytesMut::with_capacity(5));
+                    } else {
+                        record = TlsRecord::Skip(expect - len);
+                        len = 0;
                     }
                 }
             }
         }
     }
+
+    Ok(())
 }
 
 #[derive(Parser, Debug)]
@@ -267,7 +270,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let addr = args.address.clone();
         let sni = args.sni.clone();
         f.push(tokio::spawn(async move {
-            let _ = loop_ch(&addr, &sni).await;
+            loop_ch(&addr, &sni).await;
         }));
     }
 
