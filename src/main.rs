@@ -154,7 +154,7 @@ async fn loop_ch(addr: &str, sni: &str) {
 async fn socket_rw_loop(stream: &mut net::TcpStream) {
     let mut record = TlsRecord::Buffer(BytesMut::with_capacity(5));
     let mut handshake = HandshakeRecord::Buffer(BytesMut::with_capacity(4));
-    let mut buf = BytesMut::with_capacity(4 * 1024);
+    let mut buf = BytesMut::with_capacity(8 * 1024);
     loop {
         let mut len = if let Ok(len) = stream.read_buf(&mut buf).await {
             len
@@ -162,13 +162,16 @@ async fn socket_rw_loop(stream: &mut net::TcpStream) {
             return;
         };
         if len == 0 {
-            break;
+            return;
         }
         while len > 0 {
             //println!("len={len}, record={record:?} handshake={handshake:?}");
             match record {
                 TlsRecord::Buffer(mut record_buf) => {
                     let size = std::cmp::min(5 - record_buf.len(), len);
+                    if size == 0 {
+                        return;
+                    }
                     record_buf.put_slice(&buf[..size]);
                     buf.advance(size);
                     len -= size;
@@ -187,17 +190,20 @@ async fn socket_rw_loop(stream: &mut net::TcpStream) {
                     }
                 }
                 TlsRecord::Handshake(expect) => {
+                    if expect == 0 {
+                        record = TlsRecord::Buffer(BytesMut::with_capacity(5));
+                        continue;
+                    };
                     let mut len2 = std::cmp::min(expect, len);
                     len -= len2;
-                    record = if expect - len2 == 0 {
-                        TlsRecord::Buffer(BytesMut::with_capacity(5))
-                    } else {
-                        TlsRecord::Handshake(expect - len2)
-                    };
+                    record = TlsRecord::Handshake(expect - len2);
                     while len2 > 0 {
                         match handshake {
                             HandshakeRecord::Buffer(mut handshake_buf) => {
                                 let size = std::cmp::min(4 - handshake_buf.len(), len2);
+                                if size == 0 {
+                                    return;
+                                }
                                 handshake_buf.put_slice(&buf[..size]);
                                 len2 -= size;
                                 buf.advance(size);
@@ -253,7 +259,7 @@ async fn run_once(addr: &str, sni: &str) -> Result<(), Box<dyn std::error::Error
     // TODO: Would be nice to forget about the socket, to keep the conneciton open on the peer
     stream.set_linger(Some(Duration::new(0, 0)))?;
 
-    let _ = timeout(Duration::from_secs(10), socket_rw_loop(&mut stream)).await;
+    let _ = timeout(Duration::from_secs(1), socket_rw_loop(&mut stream)).await;
 
     Ok(())
 }
