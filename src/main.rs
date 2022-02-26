@@ -1,3 +1,4 @@
+use std::net::SocketAddr;
 use std::time::Duration;
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
@@ -145,7 +146,7 @@ enum TlsRecord {
     Skip(usize),
 }
 
-async fn loop_ch(addr: &str, sni: &str) {
+async fn loop_ch(addr: SocketAddr, sni: &str) {
     loop {
         let _ = run_once(addr, sni).await;
     }
@@ -250,7 +251,7 @@ async fn socket_rw_loop(stream: &mut net::TcpStream) {
     }
 }
 
-async fn run_once(addr: &str, sni: &str) -> Result<(), Box<dyn std::error::Error>> {
+async fn run_once(addr: SocketAddr, sni: &str) -> Result<(), Box<dyn std::error::Error>> {
     // println!("Loop");
     let mut stream = net::TcpStream::connect(addr).await?;
     stream.write_all(&format_client_hello(sni)).await?;
@@ -279,12 +280,14 @@ struct Args {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
+    let addr: SocketAddr = args.address.parse().unwrap();
+
     let mut f = Vec::new();
     for _ in 0..args.concurrency {
-        let addr = args.address.clone();
+        let addr = addr.clone();
         let sni = args.sni.clone();
         f.push(tokio::spawn(async move {
-            loop_ch(&addr, &sni).await;
+            loop_ch(addr, &sni).await;
         }));
     }
 
