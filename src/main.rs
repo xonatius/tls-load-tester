@@ -8,7 +8,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net;
 use tokio::time::timeout;
 
-static CIPHER_SUITES: [u8; 40] = [
+static CIPHER_SUITES: [u8; 26] = [
     0xc0, 0x2c, // TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
     0xc0, 0x30, // TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
     0xc0, 0x2b, // TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
@@ -21,13 +21,16 @@ static CIPHER_SUITES: [u8; 40] = [
     0xc0, 0x27, // TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256
     0xc0, 0x09, // TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA
     0xc0, 0x13, // TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA
-    0x00, 0x9d, // TLS_RSA_WITH_AES_256_GCM_SHA384
-    0x00, 0x9c, // TLS_RSA_WITH_AES_128_GCM_SHA256
-    0x00, 0x35, // TLS_RSA_WITH_AES_256_CBC_SHA
-    0x00, 0x3c, // TLS_RSA_WITH_AES_128_CBC_SHA256
-    0x00, 0x2f, // TLS_RSA_WITH_AES_128_CBC_SHA
-    0x00, 0x0a, // TLS_RSA_WITH_3DES_EDE_CBC_SHA
-    0x00, 0x04, // TLS_RSA_WITH_RC4_128_MD5
+    0x00, 0xff, // TLS_EMPTY_RENEGOTIATION_INFO_SCSV
+];
+
+static CIPHER_SUITES_RSA_ONLY: [u8; 14] = [
+    0xc0, 0x30, // TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+    0xc0, 0x2f, // TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+    0xc0, 0x28, // TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384
+    0xc0, 0x14, // TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA
+    0xc0, 0x27, // TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256
+    0xc0, 0x13, // TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA
     0x00, 0xff, // TLS_EMPTY_RENEGOTIATION_INFO_SCSV
 ];
 
@@ -105,7 +108,7 @@ fn format_client_hello(sni: &str) -> Bytes {
     let client_hello_length: usize = extension_length /* Extensions */
         + 2 /* Extensions length */
         + 2 /* Compressions + length */
-        + CIPHER_SUITES.len() /* Cipher Suites */
+        + CIPHER_SUITES_RSA_ONLY.len() /* Cipher Suites */
         + 2 /* Cipher quites length */
         + 32 /* Session id */
         + 1 /* Session id length */
@@ -127,8 +130,8 @@ fn format_client_hello(sni: &str) -> Bytes {
     b.put_slice(&rand::thread_rng().gen::<[u8; 32]>()); // Random
     b.put_u8(32); // Session ID length
     b.put_slice(&rand::thread_rng().gen::<[u8; 32]>()); // Session ID
-    b.put_u16(CIPHER_SUITES.len() as u16); // Cipher Suites Length
-    b.put_slice(&CIPHER_SUITES);
+    b.put_u16(CIPHER_SUITES_RSA_ONLY.len() as u16); // Cipher Suites Length
+    b.put_slice(&CIPHER_SUITES_RSA_ONLY);
     b.put_u8(1); // Compression Methods Length
     b.put_u8(0); // Compression Methods: Null
 
