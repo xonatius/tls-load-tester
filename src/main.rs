@@ -1,12 +1,20 @@
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use clap::Parser;
+use clap::{Parser, Result};
 use rand::Rng;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{stdout, AsyncReadExt, AsyncWriteExt};
 use tokio::net;
-use tokio::time::timeout;
+use tokio::time::{sleep, timeout};
+
+static ATTEMPT_COUNT: AtomicUsize = AtomicUsize::new(0);
+static ERROR_COUNT: AtomicUsize = AtomicUsize::new(0);
+static CONNECTED_COUNT: AtomicUsize = AtomicUsize::new(0);
+static SENT_COUNT: AtomicUsize = AtomicUsize::new(0);
+static RECV_COUNT: AtomicUsize = AtomicUsize::new(0);
+static TIMEOUT_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 static CIPHER_SUITES: [u8; 26] = [
     0xc0, 0x2c, // TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
@@ -267,15 +275,25 @@ async fn socket_rw_loop(stream: &mut net::TcpStream) {
 }
 
 async fn run_once(addr: SocketAddr, sni: &str) -> Result<(), Box<dyn std::error::Error>> {
-    // println!("Loop");
-    let mut stream = net::TcpStream::connect(addr).await?;
+    ATTEMPT_COUNT.fetch_add(1, Ordering::SeqCst);
+    let stream = net::TcpStream::connect(addr).await;
+    if stream.is_err() {
+        ERROR_COUNT.fetch_add(1, Ordering::SeqCst);
+    }
+    let mut stream = stream?;
+    CONNECTED_COUNT.fetch_add(1, Ordering::SeqCst);
     stream.write_all(&format_client_hello(sni)).await?;
+    SENT_COUNT.fetch_add(1, Ordering::SeqCst);
 
     // RST instead of fin
     // TODO: Would be nice to forget about the socket, to keep the conneciton open on the peer
     stream.set_linger(Some(Duration::new(0, 0)))?;
 
-    let _ = timeout(Duration::from_secs(1), socket_rw_loop(&mut stream)).await;
+    if let Ok(_) = timeout(Duration::from_secs(1), socket_rw_loop(&mut stream)).await {
+        RECV_COUNT.fetch_add(1, Ordering::SeqCst);
+    } else {
+        TIMEOUT_COUNT.fetch_add(1, Ordering::SeqCst);
+    }
 
     Ok(())
 }
@@ -289,6 +307,23 @@ struct Args {
     sni: String,
     #[clap(short, long, default_value_t = 1)]
     concurrency: usize,
+}
+
+async fn stats_loop() -> Result<Box<dyn std::error::Error>> {
+    let mut out = stdout();
+    loop {
+        let msg = format!(
+            "\nAttempt: {}\nConnected: {}\nError: {}\nWritten: {}\nReceived: {}\nTimeout: {}\n",
+            ATTEMPT_COUNT.load(Ordering::Relaxed),
+            CONNECTED_COUNT.load(Ordering::Relaxed),
+            ERROR_COUNT.load(Ordering::Relaxed),
+            SENT_COUNT.load(Ordering::Relaxed),
+            RECV_COUNT.load(Ordering::Relaxed),
+            TIMEOUT_COUNT.load(Ordering::Relaxed),
+        );
+        out.write_all(msg.as_bytes()).await?;
+        sleep(Duration::from_secs(10)).await;
+    }
 }
 
 #[tokio::main]
@@ -305,6 +340,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             loop_ch(addr, &sni).await;
         }));
     }
+
+    let _stats = tokio::spawn(async move {
+        let _ = stats_loop().await;
+    });
 
     for i in f {
         let _ = i.await;
